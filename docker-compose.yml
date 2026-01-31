@@ -1,0 +1,32 @@
+services:
+  webhook-proxy:
+    build: .
+    container_name: telegram-webhook-proxy
+    environment:
+      LISTEN_ADDR: ":8787"
+      WEBHOOK_PATH: "/telegram-webhook"
+      WEBHOOK_SECRET: "${WEBHOOK_SECRET}"
+      BACKEND_URL: "http://openclaw-gateway:8787/telegram-webhook"
+      DB_PATH: "/data/queue.db"
+      RETRY_INTERVAL: "5s"
+      MAX_RETRIES: "100"
+      TZ: "Asia/Almaty"
+    volumes:
+      - webhook-data:/data
+    ports:
+      - "8787:8787"
+    networks:
+      - openclaw-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8787/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  openclaw-network:
+    external: true
+
+volumes:
+  webhook-data:
