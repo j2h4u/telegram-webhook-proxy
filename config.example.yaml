@@ -1,0 +1,25 @@
+# Telegram Webhook Proxy Configuration
+
+server:
+  listen_addr: ":8787"
+  webhook_path: "/telegram-webhook"
+
+backend:
+  url: "http://openclaw-gateway:8787/telegram-webhook"
+  timeout: 30s
+
+queue:
+  db_path: "/data/queue.db"
+  retry_interval: 5s       # How often to check for pending retries
+  max_retries: 20          # Max attempts before giving up
+  message_ttl: 24h         # Delete messages older than this
+  initial_backoff: 1s      # First retry delay
+  max_backoff: 5m          # Maximum retry delay
+  backoff_multiplier: 2.0  # Exponential factor (1s -> 2s -> 4s -> 8s -> ...)
+
+security:
+  webhook_secret: ""       # Set via WEBHOOK_SECRET env var
+
+deduplication:
+  enabled: true
+  window_ttl: 1h           # How long to remember seen update_ids

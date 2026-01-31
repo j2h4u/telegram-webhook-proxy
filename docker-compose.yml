@@ -3,16 +3,12 @@ services:
     build: .
     container_name: telegram-webhook-proxy
     environment:
-      LISTEN_ADDR: ":8787"
-      WEBHOOK_PATH: "/telegram-webhook"
+      CONFIG_PATH: "/config/config.yaml"
       WEBHOOK_SECRET: "${WEBHOOK_SECRET}"
-      BACKEND_URL: "http://openclaw-gateway:8787/telegram-webhook"
-      DB_PATH: "/data/queue.db"
-      RETRY_INTERVAL: "5s"
-      MAX_RETRIES: "100"
       TZ: "Asia/Almaty"
     volumes:
       - webhook-data:/data
+      - ./config.yaml:/config/config.yaml:ro
     ports:
       - "8787:8787"
     networks:

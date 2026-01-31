@@ -1,3 +1,4 @@
 .env
 *.db
 webhook-proxy
+config.yaml
