@@ -67,25 +67,43 @@ type Proxy struct {
 	mu     sync.Mutex
 }
 
+// Log helpers with levels
+func logInfo(format string, v ...interface{}) {
+	log.Printf("[INFO] "+format, v...)
+}
+
+func logWarn(format string, v ...interface{}) {
+	log.Printf("[WARN] "+format, v...)
+}
+
+func logError(format string, v ...interface{}) {
+	log.Printf("[ERROR] "+format, v...)
+}
+
 func main() {
 	configPath := getEnv("CONFIG_PATH", "/config/config.yaml")
 
 	config, err := loadConfig(configPath)
 	if err != nil {
-		log.Printf("Config file not found or invalid (%s), using defaults/env", configPath)
+		logWarn("Config file not found or invalid (%s), using defaults/env", configPath)
 		config = defaultConfig()
 	}
 
 	// Environment variables override config file
 	applyEnvOverrides(&config)
 
-	log.Printf("Starting telegram-webhook-proxy")
-	log.Printf("  Listen: %s%s", config.Server.ListenAddr, config.Server.WebhookPath)
-	log.Printf("  Backend: %s (timeout: %s)", config.Backend.URL, config.Backend.Timeout)
-	log.Printf("  Queue DB: %s", config.Queue.DBPath)
-	log.Printf("  Retry: every %s, max %d attempts", config.Queue.RetryInterval, config.Queue.MaxRetries)
-	log.Printf("  Message TTL: %s", config.Queue.MessageTTL)
-	log.Printf("  Deduplication: %v (window: %s)", config.Deduplication.Enabled, config.Deduplication.WindowTTL)
+	logInfo("Starting telegram-webhook-proxy")
+	listenDisplay := config.Server.ListenAddr
+	if listenDisplay[0] == ':' {
+		listenDisplay = "0.0.0.0" + listenDisplay
+	}
+	logInfo("  Listen: %s%s", listenDisplay, config.Server.WebhookPath)
+	logInfo("  Backend: %s (timeout: %s)", config.Backend.URL, config.Backend.Timeout)
+	logInfo("  Queue DB: %s", config.Queue.DBPath)
+	logInfo("  Retry: every %s, max %d attempts", config.Queue.RetryInterval, config.Queue.MaxRetries)
+	logInfo("  Backoff: %s → ×%.1f → max %s", config.Queue.InitialBackoff, config.Queue.BackoffMultiplier, config.Queue.MaxBackoff)
+	logInfo("  Message TTL: %s", config.Queue.MessageTTL)
+	logInfo("  Deduplication: %v (window: %s)", config.Deduplication.Enabled, config.Deduplication.WindowTTL)
 
 	proxy, err := NewProxy(config)
 	if err != nil {
@@ -102,9 +120,9 @@ func main() {
 	http.HandleFunc("/healthz", proxy.handleHealth)
 	http.HandleFunc("/stats", proxy.handleStats)
 
-	log.Printf("Listening on %s", config.Server.ListenAddr)
+	logInfo("Listening on %s", config.Server.ListenAddr)
 	if err := http.ListenAndServe(config.Server.ListenAddr, nil); err != nil {
-		log.Fatalf("Server failed: %v", err)
+		log.Fatalf("[FATAL] Server failed: %v", err)
 	}
 }
 
@@ -255,7 +273,7 @@ func (p *Proxy) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	if p.config.Security.WebhookSecret != "" {
 		token := r.Header.Get("X-Telegram-Bot-Api-Secret-Token")
 		if token != p.config.Security.WebhookSecret {
-			log.Printf("Invalid secret token from %s", r.RemoteAddr)
+			logWarn("Invalid secret token from %s", r.RemoteAddr)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
@@ -264,7 +282,7 @@ func (p *Proxy) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	// Read body
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		log.Printf("Failed to read body: %v", err)
+		logError("Failed to read body: %v", err)
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
 	}
@@ -272,7 +290,7 @@ func (p *Proxy) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	// Extract update_id for deduplication
 	var update TelegramUpdate
 	if err := json.Unmarshal(body, &update); err != nil {
-		log.Printf("Failed to parse update: %v", err)
+		logWarn("Failed to parse update: %v", err)
 		// Still try to process even if we can't parse
 		update.UpdateID = 0
 	}
@@ -280,7 +298,7 @@ func (p *Proxy) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	// Check for duplicate
 	if p.config.Deduplication.Enabled && update.UpdateID > 0 {
 		if p.isDuplicate(update.UpdateID) {
-			log.Printf("Duplicate update_id=%d, skipping", update.UpdateID)
+			logInfo("Duplicate update_id=%d, skipping", update.UpdateID)
 			w.WriteHeader(http.StatusOK)
 			return
 		}
@@ -295,7 +313,7 @@ func (p *Proxy) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
 	// Queue for later
 	if err := p.enqueue(update.UpdateID, body); err != nil {
-		log.Printf("Failed to enqueue: %v", err)
+		logError("Failed to enqueue: %v", err)
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -308,7 +326,7 @@ func (p *Proxy) isDuplicate(updateID int64) bool {
 	var count int
 	err := p.db.QueryRow("SELECT COUNT(*) FROM seen_updates WHERE update_id = ?", updateID).Scan(&count)
 	if err != nil {
-		log.Printf("Failed to check duplicate: %v", err)
+		logError("Failed to check duplicate: %v", err)
 		return false
 	}
 	return count > 0
@@ -320,14 +338,14 @@ func (p *Proxy) markSeen(updateID int64) {
 
 	_, err := p.db.Exec("INSERT OR IGNORE INTO seen_updates (update_id) VALUES (?)", updateID)
 	if err != nil {
-		log.Printf("Failed to mark seen: %v", err)
+		logError("Failed to mark seen: %v", err)
 	}
 }
 
 func (p *Proxy) tryDeliver(payload []byte) bool {
 	req, err := http.NewRequest(http.MethodPost, p.config.Backend.URL, bytes.NewReader(payload))
 	if err != nil {
-		log.Printf("Failed to create request: %v", err)
+		logError("Failed to create request: %v", err)
 		return false
 	}
 
@@ -338,7 +356,7 @@ func (p *Proxy) tryDeliver(payload []byte) bool {
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		log.Printf("Backend request failed: %v", err)
+		logWarn("Backend request failed: %v", err)
 		return false
 	}
 	defer resp.Body.Close()
@@ -347,7 +365,7 @@ func (p *Proxy) tryDeliver(payload []byte) bool {
 		return true
 	}
 
-	log.Printf("Backend returned %d", resp.StatusCode)
+	logWarn("Backend returned %d", resp.StatusCode)
 	return false
 }
 
@@ -360,7 +378,7 @@ func (p *Proxy) enqueue(updateID int64, payload []byte) error {
 		var count int
 		p.db.QueryRow("SELECT COUNT(*) FROM queue WHERE update_id = ?", updateID).Scan(&count)
 		if count > 0 {
-			log.Printf("Update %d already in queue, skipping", updateID)
+			logInfo("Update %d already in queue, skipping", updateID)
 			return nil
 		}
 	}
@@ -370,7 +388,7 @@ func (p *Proxy) enqueue(updateID int64, payload []byte) error {
 		return err
 	}
 
-	log.Printf("Queued update_id=%d for later delivery", updateID)
+	logInfo("Queued update_id=%d for later delivery", updateID)
 	return nil
 }
 
@@ -396,7 +414,7 @@ func (p *Proxy) processQueueBatch() {
 		LIMIT 10
 	`, p.config.Queue.MaxRetries, now)
 	if err != nil {
-		log.Printf("Failed to query queue: %v", err)
+		logError("Failed to query queue: %v", err)
 		return
 	}
 	defer rows.Close()
@@ -405,7 +423,7 @@ func (p *Proxy) processQueueBatch() {
 	for rows.Next() {
 		var item QueueItem
 		if err := rows.Scan(&item.ID, &item.UpdateID, &item.Payload, &item.Attempts); err != nil {
-			log.Printf("Failed to scan row: %v", err)
+			logError("Failed to scan row: %v", err)
 			continue
 		}
 		items = append(items, item)
@@ -414,9 +432,9 @@ func (p *Proxy) processQueueBatch() {
 	for _, item := range items {
 		if p.tryDeliver(item.Payload) {
 			if _, err := p.db.Exec("DELETE FROM queue WHERE id = ?", item.ID); err != nil {
-				log.Printf("Failed to delete item %d: %v", item.ID, err)
+				logError("Failed to delete item %d: %v", item.ID, err)
 			} else {
-				log.Printf("Delivered queued update_id=%d (attempt %d)", item.UpdateID, item.Attempts+1)
+				logInfo("Delivered queued update_id=%d (attempt %d)", item.UpdateID, item.Attempts+1)
 			}
 		} else {
 			// Calculate next retry with exponential backoff
@@ -427,9 +445,9 @@ func (p *Proxy) processQueueBatch() {
 				"UPDATE queue SET attempts = attempts + 1, next_retry = ? WHERE id = ?",
 				nextRetry, item.ID,
 			); err != nil {
-				log.Printf("Failed to update item %d: %v", item.ID, err)
+				logError("Failed to update item %d: %v", item.ID, err)
 			} else {
-				log.Printf("Retry scheduled for update_id=%d in %s (attempt %d)",
+				logWarn("Retry scheduled for update_id=%d in %s (attempt %d)",
 					item.UpdateID, nextBackoff, item.Attempts+1)
 			}
 		}
@@ -465,18 +483,18 @@ func (p *Proxy) cleanup() {
 	cutoff := time.Now().Add(-p.config.Queue.MessageTTL)
 	result, err := p.db.Exec("DELETE FROM queue WHERE created_at < ?", cutoff)
 	if err != nil {
-		log.Printf("Failed to cleanup queue: %v", err)
+		logError("Failed to cleanup queue: %v", err)
 	} else if n, _ := result.RowsAffected(); n > 0 {
-		log.Printf("Cleaned up %d expired messages from queue", n)
+		logInfo("Cleaned up %d expired messages from queue", n)
 	}
 
 	// Remove old entries from deduplication table
 	dedupCutoff := time.Now().Add(-p.config.Deduplication.WindowTTL)
 	result, err = p.db.Exec("DELETE FROM seen_updates WHERE seen_at < ?", dedupCutoff)
 	if err != nil {
-		log.Printf("Failed to cleanup seen_updates: %v", err)
+		logError("Failed to cleanup seen_updates: %v", err)
 	} else if n, _ := result.RowsAffected(); n > 0 {
-		log.Printf("Cleaned up %d old deduplication entries", n)
+		logInfo("Cleaned up %d old deduplication entries", n)
 	}
 }
 
