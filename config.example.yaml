@@ -5,7 +5,7 @@ server:
   webhook_path: "/telegram-webhook"
 
 backend:
-  url: "http://openclaw-gateway:8787/telegram-webhook"
+  url: "http://openclaw-gateway:18789/telegram-webhook"
   timeout: 30s
 
 queue:

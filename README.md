@@ -133,7 +133,7 @@ After `max_retries` attempts, the message is marked as failed but kept until `me
   "pending": 3,
   "failed": 2,
   "dedup_window_size": 150,
-  "backend_url": "http://openclaw-gateway:8787/telegram-webhook",
+  "backend_url": "http://your-bot:8080/webhook",
   "max_retries": 20,
   "message_ttl": "24h0m0s",
   "deduplication": true
